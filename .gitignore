@@ -1,0 +1,14 @@
+# Generated secrets and deployment bundles never belong in this repository.
+__pycache__/
+*.py[cod]
+.venv/
+.DS_Store
+*.pem
+*.key
+*.p12
+*.pfx
+client.json
+server.json
+manifest.json
+*-private-bundle/
+.wg-hy2-stage-*/

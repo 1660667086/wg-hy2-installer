@@ -55,16 +55,29 @@ python3 wg_hy2_generate.py --mode dual \
 
 ## 安装服务器角色
 
-将仓库里的 `wg_hy2_install.py`、对应角色目录，以及适合目标服务器架构并已校验的 sing-box 二进制，通过 SSH/SCP 等经过认证的安全通道复制到对应服务器。不要把本机 macOS 二进制直接用于 Linux 服务器。
+将仓库里的 `wg_hy2_install.py`、`install_role.sh`、对应角色目录，以及适合目标服务器架构并已校验的 sing-box 二进制，通过 SSH/SCP 等经过认证的安全通道复制到对应服务器。不要把本机 macOS 二进制直接用于 Linux 服务器。
 
-在目标服务器上，以 root 运行：
+最简安装方式是在每台服务器上运行一条命令。双机模式先在落地机执行，再在中转机执行：
 
 ```sh
-python3 wg_hy2_install.py --bundle /安全路径/角色目录 \
-  --sing-box /安全路径/sing-box --name mynode
+sudo ./install_role.sh /安全路径/landing
+sudo ./install_role.sh /安全路径/relay
 ```
 
-双机模式先在落地机安装 `landing/`，再在中转机安装 `relay/`；单机安装 `single/`。`--name` 用于区分独立服务，安装器不会主动覆盖同名已有部署。可先加 `--dry-run` 检查配置、manifest 和二进制，但它不会验证云端口、系统防火墙或实际网络连通性；`--no-enable` 表示现在启动服务但不设置开机自启，具体见 `python3 wg_hy2_install.py --help`。
+如果 `sing-box` 不在 PATH，可通过环境变量指定路径：
+
+```sh
+sudo SING_BOX=/安全路径/sing-box ./install_role.sh /安全路径/landing
+```
+
+脚本会从 `manifest.json` 自动识别 `landing`、`relay` 或 `single` 角色，并以该角色作为服务名；如需多个同角色实例，可追加 `--name NAME`。安装器不会主动覆盖同名已有部署。`--no-enable` 表示启动服务但不设置开机自启，`--dry-run` 表示只检查不修改系统：
+
+```sh
+sudo ./install_role.sh /安全路径/landing --no-enable
+sudo ./install_role.sh /安全路径/relay --dry-run
+```
+
+也可以直接调用 `wg_hy2_install.py`；`--sing-box` 默认使用 PATH 中的 `sing-box`，`--name` 默认使用 manifest 中的角色名。双机模式仍须分别安装 `landing/` 和 `relay/`，不能把同一角色目录同时放到两台服务器。
 
 配置云安全组时：
 

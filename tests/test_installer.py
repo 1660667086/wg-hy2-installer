@@ -226,6 +226,17 @@ class InstallerTest(unittest.TestCase):
             installer.write_exclusive(path, "replace", 0o600)
         self.assertEqual(path.read_text(), "keep")
 
+    def test_binary_can_be_resolved_from_path_or_explicit_path(self):
+        binary = self.path / "sing-box"
+        binary.write_bytes(b"binary")
+        binary.chmod(0o700)
+        self.assertEqual(installer.resolve_binary(str(binary)), binary.resolve())
+        with patch.object(installer.shutil, "which", return_value=str(binary)):
+            self.assertEqual(installer.resolve_binary("sing-box"), binary.resolve())
+        with patch.object(installer.shutil, "which", return_value=None):
+            with self.assertRaises(installer.InstallError):
+                installer.resolve_binary("missing-sing-box")
+
 
 if __name__ == "__main__":
     unittest.main()

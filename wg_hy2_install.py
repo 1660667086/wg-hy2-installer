@@ -189,6 +189,14 @@ def check_binary(binary):
         raise InstallError("sing-box is missing required build tags: " + ", ".join(missing))
 
 
+def resolve_binary(value):
+    """Resolve an explicit path or an executable available in PATH."""
+    selected = shutil.which(value) if "/" not in value else value
+    if not selected:
+        raise InstallError(f"Cannot find sing-box executable: {value}")
+    return Path(selected).resolve()
+
+
 def firewall_rules(manifest, name):
     """Return insertion-order rules; every rule carries a unique comment."""
     marker = "wg-hy2-" + name
@@ -330,14 +338,15 @@ def perform_install(*, target, unit, unit_name, binary, config, manifest, rules,
 
 
 def install(args):
-    if not NAME_RE.fullmatch(args.name):
-        raise InstallError("--name must be 1–31 ASCII letters, digits, '_' or '-' and start with a letter/digit")
     bundle = Path(args.bundle).resolve()
     manifest = parse_manifest(read_object(bundle / "manifest.json"))
+    name = args.name or manifest["role"]
+    if not NAME_RE.fullmatch(name):
+        raise InstallError("--name must be 1–31 ASCII letters, digits, '_' or '-' and start with a letter/digit")
     config_path = bundle / "server.json"
     config = read_object(config_path)
     check_config_shape(config, manifest)
-    binary = Path(args.sing_box).resolve()
+    binary = resolve_binary(args.sing_box)
     check_binary(binary)
     # Validate the parsed snapshot rather than re-reading a potentially changed
     # bundle file between checking and installation.
@@ -345,8 +354,8 @@ def install(args):
         snapshot = Path(tmp) / "server.json"
         write_exclusive(snapshot, json.dumps(config) + "\n", 0o600)
         run([str(binary), "check", "-c", str(snapshot)], capture=True)
-    target = Path("/opt") / ("wg-hy2-" + args.name)
-    unit_name = "wg-hy2-" + args.name + ".service"
+    target = Path("/opt") / ("wg-hy2-" + name)
+    unit_name = "wg-hy2-" + name + ".service"
     unit = Path("/etc/systemd/system") / unit_name
     if args.dry_run:
         print(f"Bundle validated: {manifest['role']}; planned service {unit_name}; no changes made.")
@@ -363,14 +372,14 @@ def install(args):
     for wants in Path("/etc/systemd/system").glob("*.wants"):
         if os.path.lexists(wants / unit_name):
             raise InstallError("An existing systemd enablement link uses this name")
-    marker = "wg-hy2-" + args.name
+    marker = "wg-hy2-" + name
     for tool in (ip4, ip6):
         existing = run([tool, "-w", "-S", "INPUT"], capture=True).stdout
         if marker in existing:
             raise InstallError("An existing firewall rule uses this installation name")
     for n in {manifest["hy2_port"], manifest["wg_port"]} - {None}:
         available_udp(n)
-    rules = firewall_rules(manifest, args.name)
+    rules = firewall_rules(manifest, name)
     perform_install(target=target, unit=unit, unit_name=unit_name, binary=binary,
                     config=config, manifest=manifest, rules=rules, systemctl=systemctl,
                     ip4=ip4, ip6=ip6, no_enable=args.no_enable)
@@ -385,8 +394,9 @@ def exit_on_signal(signum, _frame):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bundle", required=True, help="generated server bundle directory")
-    parser.add_argument("--sing-box", required=True, help="path to verified sing-box 1.14.4 executable")
-    parser.add_argument("--name", required=True, help="unique instance name")
+    parser.add_argument("--sing-box", default="sing-box",
+                        help="verified sing-box 1.14.4 executable path or PATH name (default: sing-box)")
+    parser.add_argument("--name", help="unique instance name (default: role from manifest)")
     parser.add_argument("--no-enable", action="store_true", help="start now without enabling at boot")
     parser.add_argument("--dry-run", action="store_true", help="validate inputs, without modifying the system")
     args = parser.parse_args()

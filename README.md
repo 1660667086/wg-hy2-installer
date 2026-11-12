@@ -82,6 +82,23 @@ sudo ./one_click_install.sh /安全路径/relay --dry-run \
 
 `--dry-run` 不会下载二进制，因此需要已有匹配的 `sing-box`。如果不希望脚本下载，可以直接使用不下载的轻量包装器 `install_role.sh`，或直接调用 `wg_hy2_install.py`；`--sing-box` 默认使用 PATH 中的 `sing-box`，`--name` 默认使用 manifest 中的角色名。双机模式仍须分别安装 `landing/` 和 `relay/`，不能把同一角色目录同时放到两台服务器。
 
+## 从本机一键部署双机
+
+如果希望从生成配置的可信电脑一次拉起两台服务器，可以使用 `deploy_dual.sh`。它会在本机生成临时私有包，通过 SSH 密钥/agent 分别上传 `landing` 和 `relay`，按“先落地、后中转”的顺序安装，最后把客户端配置保存到本机；临时上传目录会在远端清理。脚本不接受或保存服务器密码，也不会自动修改云安全组：
+
+```sh
+./deploy_dual.sh \
+  --relay-host '<中转机SSH地址>' \
+  --landing-host '<落地机SSH地址>' \
+  --relay-ip '<中转机公网IPv4>' \
+  --landing-ip '<落地机公网IPv4>' \
+  --identity ~/.ssh/id_ed25519 \
+  --sing-box /本机路径/sing-box \
+  --client-output ./client.json
+```
+
+如果 SSH 地址本身就是公网 IPv4，可省略 `--relay-ip` 和 `--landing-ip`。默认远端服务启动但不设置开机自启；追加 `--enable` 才会启用开机自启。两台服务器必须允许对应 SSH 登录，且本机已能使用 `ssh`/`scp` 密钥无交互登录；落地机仍需在云安全组放行来自中转机实际出口地址的 WG UDP 端口，中转机放行 HY2 UDP 端口。
+
 配置云安全组时：
 
 | 模式与服务器 | 入站规则 |

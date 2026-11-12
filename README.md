@@ -110,6 +110,19 @@ curl -fsSL https://raw.githubusercontent.com/1660667086/wg-hy2-installer/main/bo
 
 中转机把路径换成 `/安全路径/relay`，同样执行一次。`bootstrap.sh` 会从 GitHub 拉取安装器和一键脚本到临时目录，安装结束后自动清理。若服务器没有匹配的 sing-box，它会继续从官方发布地址下载并校验固定 SHA-256。**角色目录含有私钥和密码，不能从公开 GitHub 拉取；必须通过 SSH/SCP 等安全方式单独上传。**
 
+如果连角色目录也不想从本机上传，可以直接在**中转服务器**执行下面这一条命令。它会在中转机生成私有配置，在中转机本地安装 `relay`，再通过 SSH 把 `landing` 角色发送到落地服务器并安装：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/1660667086/wg-hy2-installer/main/server_dual_install.sh \
+  | sudo bash -s -- \
+      --relay-ip '<中转机公网IPv4>' \
+      --landing-host '<落地机SSH地址>' \
+      --landing-ip '<落地机公网IPv4>' \
+      --identity /root/.ssh/id_ed25519
+```
+
+这条命令不依赖本机电脑，但要求中转服务器能用 SSH 密钥无交互登录落地服务器（默认 root），并且已安装 `curl`、`scp`、`ssh`、`python3`、`tar`。客户端配置会保存在中转机的 `/root/wg-hy2-client.json`；默认不设置开机自启，追加 `--enable` 才启用。
+
 配置云安全组时：
 
 | 模式与服务器 | 入站规则 |

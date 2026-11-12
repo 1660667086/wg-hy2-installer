@@ -16,6 +16,7 @@
 
 - 一台可信的配置生成设备，安装 Python 3、OpenSSL 和带 `with_gvisor`、`with_quic`、`with_wireguard` 的 sing-box 1.14.4。
 - 单机模式需要一台有公网 IPv4 的 Linux 服务器；双机模式需要两台。服务器端需要 systemd、iptables/ip6tables、Python 3，以及与服务器架构匹配的 sing-box 1.14.4。
+- 使用 `one_click_install.sh` 自动准备 sing-box 时，还需要 `curl`、`tar` 和 `sha256sum`（或 `shasum`）；脚本不会替你安装这些系统工具。
 - 从 [sing-box 官方 v1.14.4 发布页](https://github.com/SagerNet/sing-box/releases/tag/v1.14.4)获取对应平台的二进制文件，并自行核验官方发布的校验值。生成配置的设备和服务器可以使用不同架构的二进制，但版本和所需编译标签必须匹配。
 - 云防火墙或安全组允许入口服务器的 HY2 UDP 端口。双机模式还需让落地服务器的 WG UDP 端口接收来自**中转机实际公网出口 IPv4**的流量。不要对公网开放单机内部的 WG 端口。
 - 每个客户端应使用独立的 WireGuard peer。不要让多台设备同时使用同一份客户端配置，否则 peer 地址可能互相抢占。
@@ -55,29 +56,31 @@ python3 wg_hy2_generate.py --mode dual \
 
 ## 安装服务器角色
 
-将仓库里的 `wg_hy2_install.py`、`install_role.sh`、对应角色目录，以及适合目标服务器架构并已校验的 sing-box 二进制，通过 SSH/SCP 等经过认证的安全通道复制到对应服务器。不要把本机 macOS 二进制直接用于 Linux 服务器。
+将仓库里的 `wg_hy2_install.py`、`one_click_install.sh`、对应角色目录，以及适合目标服务器架构并已校验的 sing-box 二进制，通过 SSH/SCP 等经过认证的安全通道复制到对应服务器。不要把本机 macOS 二进制直接用于 Linux 服务器。
 
 最简安装方式是在每台服务器上运行一条命令。双机模式先在落地机执行，再在中转机执行：
 
 ```sh
-sudo ./install_role.sh /安全路径/landing
-sudo ./install_role.sh /安全路径/relay
+sudo ./one_click_install.sh /安全路径/landing
+sudo ./one_click_install.sh /安全路径/relay
 ```
 
-如果 `sing-box` 不在 PATH，可通过环境变量指定路径：
+一键脚本会优先使用 PATH 中且版本/编译标签匹配的 `sing-box`；找不到时，只在支持的 Linux 架构上下载 sing-box 1.14.4 官方发布包，并校验脚本内固定的 SHA-256 后再安装到 `/usr/local/libexec/wg-hy2/`。也可以显式指定已核验的二进制：
 
 ```sh
-sudo SING_BOX=/安全路径/sing-box ./install_role.sh /安全路径/landing
+sudo ./one_click_install.sh /安全路径/landing \
+  --sing-box /安全路径/sing-box
 ```
 
 脚本会从 `manifest.json` 自动识别 `landing`、`relay` 或 `single` 角色，并以该角色作为服务名；如需多个同角色实例，可追加 `--name NAME`。安装器不会主动覆盖同名已有部署。`--no-enable` 表示启动服务但不设置开机自启，`--dry-run` 表示只检查不修改系统：
 
 ```sh
-sudo ./install_role.sh /安全路径/landing --no-enable
-sudo ./install_role.sh /安全路径/relay --dry-run
+sudo ./one_click_install.sh /安全路径/landing --no-enable
+sudo ./one_click_install.sh /安全路径/relay --dry-run \
+  --sing-box /安全路径/sing-box
 ```
 
-也可以直接调用 `wg_hy2_install.py`；`--sing-box` 默认使用 PATH 中的 `sing-box`，`--name` 默认使用 manifest 中的角色名。双机模式仍须分别安装 `landing/` 和 `relay/`，不能把同一角色目录同时放到两台服务器。
+`--dry-run` 不会下载二进制，因此需要已有匹配的 `sing-box`。如果不希望脚本下载，可以直接使用不下载的轻量包装器 `install_role.sh`，或直接调用 `wg_hy2_install.py`；`--sing-box` 默认使用 PATH 中的 `sing-box`，`--name` 默认使用 manifest 中的角色名。双机模式仍须分别安装 `landing/` 和 `relay/`，不能把同一角色目录同时放到两台服务器。
 
 配置云安全组时：
 

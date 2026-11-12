@@ -99,6 +99,17 @@ sudo ./one_click_install.sh /安全路径/relay --dry-run \
 
 如果 SSH 地址本身就是公网 IPv4，可省略 `--relay-ip` 和 `--landing-ip`。默认远端服务启动但不设置开机自启；追加 `--enable` 才会启用开机自启。两台服务器必须允许对应 SSH 登录，且本机已能使用 `ssh`/`scp` 密钥无交互登录；落地机仍需在云安全组放行来自中转机实际出口地址的 WG UDP 端口，中转机放行 HY2 UDP 端口。
 
+## 在服务器上从 GitHub 一键拉取
+
+如果你已经把私有的 `landing/` 或 `relay/` 角色目录上传到服务器，可以不复制整个仓库，直接在服务器执行：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/1660667086/wg-hy2-installer/main/bootstrap.sh \
+  | sudo bash -s -- /安全路径/landing --no-enable
+```
+
+中转机把路径换成 `/安全路径/relay`，同样执行一次。`bootstrap.sh` 会从 GitHub 拉取安装器和一键脚本到临时目录，安装结束后自动清理。若服务器没有匹配的 sing-box，它会继续从官方发布地址下载并校验固定 SHA-256。**角色目录含有私钥和密码，不能从公开 GitHub 拉取；必须通过 SSH/SCP 等安全方式单独上传。**
+
 配置云安全组时：
 
 | 模式与服务器 | 入站规则 |

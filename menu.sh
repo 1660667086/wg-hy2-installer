@@ -111,6 +111,67 @@ install_dual() {
         --hy2-port "$hy2_port" --wg-port "$wg_port" ${identity_arg[@]+"${identity_arg[@]}"} ${enable_arg[@]+"${enable_arg[@]}"} || true
 }
 
+prepare_landing() {
+    local relay_ip landing_ip hy2_port wg_port
+    local -a enable_arg=()
+    printf '\n请在落地服务器上运行。中转机出口 IP 必须是落地机实际看到的公网源地址。\n' >&3
+    ask_required relay_ip '中转机实际公网出口 IPv4'
+    ask_required landing_ip '本落地机公网 IPv4'
+    ask_port hy2_port '中转机将使用的 HY2 UDP 端口' 443
+    ask_port wg_port '本落地机 WireGuard UDP 端口' 51820
+    ask_enable
+    printf '请在落地机安全组允许来自中转机的 UDP %s。\n' "$wg_port" >&3
+    run_install server_landing_prepare.sh --relay-ip "$relay_ip" --landing-ip "$landing_ip" \
+        --hy2-port "$hy2_port" --wg-port "$wg_port" ${enable_arg[@]+"${enable_arg[@]}"} || true
+}
+
+show_handoff() {
+    local token=/root/wg-hy2-landing-handoff/relay-token.txt
+    if [[ ! -f $token || ! -f /root/wg-hy2-landing-handoff/installed ]]; then
+        printf '没有找到已完成安装的对接信息，请先在本机完成落地安装。\n' >&3
+        return
+    fi
+    printf '\n对接信息包含私钥，请只发送给可信的中转机，切勿公开。复制下面全部内容：\n' >&3
+    cat "$token" >&3
+    printf '\n复制完成后，在中转机的导入界面粘贴，并单独输入 END。\n' >&3
+}
+
+import_relay() {
+    local dir line status=0 count=0
+    local -a enable_arg=()
+    ask_enable
+    dir=$(mktemp -d /tmp/wg-hy2-import.XXXXXXXX) || fail '无法创建临时目录。'
+    chmod 700 "$dir"
+    : > "$dir/token"
+    chmod 600 "$dir/token"
+    trap 'rm -f -- "$dir/token"; rmdir -- "$dir"; exit 130' INT TERM
+    printf '\n请粘贴落地机生成的全部对接信息，最后另起一行输入 END。对接信息包含私钥。\n' >&3
+    while IFS= read -r line <&3; do
+        [[ $line == END ]] && break
+        count=$((count + ${#line} + 1))
+        if (( count > 131072 )); then
+            printf '对接信息过长，已取消。\n' >&3
+            rm -f -- "$dir/token"
+            rmdir -- "$dir"
+            trap - INT TERM
+            return 1
+        fi
+        printf '%s\n' "$line" >> "$dir/token"
+    done
+    if [[ ${line-} != END ]]; then
+        printf '输入中断，未安装。\n' >&3
+        rm -f -- "$dir/token"
+        rmdir -- "$dir"
+        trap - INT TERM
+        return
+    fi
+    run_install server_relay_import.sh --token-file "$dir/token" ${enable_arg[@]+"${enable_arg[@]}"} || status=$?
+    rm -f -- "$dir/token"
+    rmdir -- "$dir"
+    trap - INT TERM
+    return "$status"
+}
+
 choose_service() {
     local choice
     while :; do
@@ -148,12 +209,15 @@ manage_service() {
 }
 
 while :; do
-    printf '\n=== WG + HY2 安装管理 ===\n1) 安装单机出口\n2) 安装双机（在中转机执行）\n3) 管理本机服务\n0) 退出\n' >&3
+    printf '\n=== WG + HY2 安装管理 ===\n1) 安装单机出口\n2) 安装双机（中转机通过 SSH 安装落地机）\n3) 管理本机服务\n4) 安装落地机并生成对接信息\n5) 在中转机导入对接信息并安装\n6) 显示落地机对接信息\n0) 退出\n' >&3
     ask choice '请选择'
     case $choice in
         1) install_single ;;
         2) install_dual ;;
         3) manage_service ;;
+        4) prepare_landing ;;
+        5) import_relay || true ;;
+        6) show_handoff ;;
         0) printf '已退出。\n' >&3; exit 0 ;;
         *) printf '请输入有效选项。\n' >&3 ;;
     esac

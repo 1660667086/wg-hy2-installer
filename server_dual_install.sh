@@ -19,7 +19,7 @@ Usage (run as root on the relay/control server):
     | sudo bash -s -- --relay-ip RELAY_PUBLIC_IPV4 \
       --landing-host LANDING_SSH_HOST --landing-ip LANDING_PUBLIC_IPV4 \
       [--landing-user root] [--ssh-port 22] [--identity SSH_KEY] \
-      [--client-output /root/wg-hy2-client.json] [--enable]
+      [--client-output /root/wg-hy2-client.json] [--hy2-port 443] [--wg-port 51820] [--enable]
 
 The relay server is the current machine. SSH key/agent authentication from
 this machine to the landing server is required; passwords are not handled.
@@ -43,6 +43,8 @@ ssh_port="22"
 identity=""
 client_output="/root/wg-hy2-client.json"
 enable=0
+hy2_port=443
+wg_port=51820
 
 while (( $# > 0 )); do
     case "$1" in
@@ -53,6 +55,8 @@ while (( $# > 0 )); do
         --ssh-port) (( $# >= 2 )) || die "--ssh-port needs a value"; ssh_port=$2; shift 2 ;;
         --identity) (( $# >= 2 )) || die "--identity needs a path"; identity=$2; shift 2 ;;
         --client-output) (( $# >= 2 )) || die "--client-output needs a path"; client_output=$2; shift 2 ;;
+        --hy2-port) (( $# >= 2 )) || die "--hy2-port needs a value"; hy2_port=$2; shift 2 ;;
+        --wg-port) (( $# >= 2 )) || die "--wg-port needs a value"; wg_port=$2; shift 2 ;;
         --enable) enable=1; shift ;;
         --no-enable) enable=0; shift ;;
         -h|--help) usage; exit 0 ;;
@@ -65,13 +69,17 @@ done
 [[ -n "$landing_ip" ]] || { usage; die "--landing-ip is required"; }
 [[ "$ssh_port" =~ ^[0-9]+$ ]] && (( ssh_port >= 1 && ssh_port <= 65535 )) \
     || die "--ssh-port must be 1..65535"
+[[ "$hy2_port" =~ ^[1-9][0-9]{0,4}$ ]] && (( hy2_port <= 65535 )) || die "invalid HY2 port"
+[[ "$wg_port" =~ ^[1-9][0-9]{0,4}$ ]] && (( wg_port <= 65535 )) || die "invalid WG port"
+[[ "$landing_host" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]] || die "invalid landing SSH hostname"
+[[ "$landing_user" =~ ^[a-zA-Z_][a-zA-Z0-9_-]*$ ]] || die "invalid landing SSH user"
 [[ ! -e "$client_output" && ! -L "$client_output" ]] \
     || die "refusing to overwrite existing client output: $client_output"
 client_parent=$(dirname -- "$client_output")
 [[ -d "$client_parent" ]] || die "client output directory does not exist: $client_parent"
 
 ssh_opts=(-o BatchMode=yes -p "$ssh_port")
-scp_opts=(-P "$ssh_port")
+scp_opts=(-o BatchMode=yes -P "$ssh_port")
 if [[ -n "$identity" ]]; then
     [[ -r "$identity" ]] || die "SSH identity is not readable: $identity"
     ssh_opts+=(-i "$identity")
@@ -108,7 +116,10 @@ else
     esac
     cache_dir="/usr/local/libexec/wg-hy2"
     local_sing_box="$cache_dir/sing-box-${VERSION}-${arch}"
-    if ! compatible_binary "$local_sing_box"; then
+    if [[ -e "$local_sing_box" ]] && ! compatible_binary "$local_sing_box"; then
+        die "existing cached binary is incompatible: $local_sing_box"
+    fi
+    if [[ ! -e "$local_sing_box" ]]; then
         tmp_download=$(mktemp -d "${TMPDIR:-/tmp}/wg-hy2-sing-box.XXXXXX")
         trap 'rm -rf -- "${tmp_download:-}"' EXIT INT TERM
         archive="$tmp_download/$asset"
@@ -137,13 +148,25 @@ fi
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/wg-hy2-server-dual.XXXXXX")
 chmod 700 "$tmp"
-remote_stage="/tmp/wg-hy2-server-dual-$(date +%s)-$RANDOM"
+remote_stage=""
+recovery=""
 cleanup() {
+    local status=$?
     set +e
-    ssh "${ssh_opts[@]}" "$landing_user@$landing_host" "rm -rf -- '$remote_stage'" >/dev/null 2>&1 || true
+    if [[ -n "$remote_stage" ]]; then
+        ssh "${ssh_opts[@]}" "$landing_user@$landing_host" "rm -rf -- '$remote_stage'" >/dev/null 2>&1 || true
+    fi
     rm -rf -- "$tmp"
+    if [[ -n "$recovery" ]]; then
+        echo "Private recovery bundle retained at: $recovery" >&2
+        if (( status != 0 )); then
+            echo "Installation may be partial; inspect both services before retrying." >&2
+        fi
+    fi
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 fetch() {
     local name=$1
@@ -156,15 +179,29 @@ fetch wg_hy2_generate.py
 fetch wg_hy2_install.py
 fetch one_click_install.sh
 
-bundle="$tmp/bundle"
+recovery=$(mktemp -d /root/wg-hy2-recovery.XXXXXXXX)
+chmod 700 "$recovery"
+bundle="$recovery/bundle"
 echo "Generating private dual-server credentials on this server..." >&2
 python3 "$tmp/wg_hy2_generate.py" --mode dual \
     --entry-ip "$relay_ip" --exit-ip "$landing_ip" \
+    --hy2-port "$hy2_port" --wg-port "$wg_port" \
     --sing-box "$local_sing_box" --output "$bundle"
 
+# Save client credentials before installing either role. Exclusive creation
+# prevents a concurrent run from replacing an existing user's configuration.
+python3 - "$bundle/client/client.json" "$client_output" <<'PY'
+import os, shutil, sys
+fd = os.open(sys.argv[2], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+with os.fdopen(fd, 'wb') as dst, open(sys.argv[1], 'rb') as src:
+    shutil.copyfileobj(src, dst)
+PY
+echo "Client config saved at: $client_output" >&2
+
 echo "Preparing landing server..." >&2
-ssh "${ssh_opts[@]}" "$landing_user@$landing_host" \
-    "umask 077; mkdir -p -- '$remote_stage'; chmod 700 -- '$remote_stage'"
+remote_stage=$(ssh "${ssh_opts[@]}" "$landing_user@$landing_host" \
+    'umask 077; mktemp -d /tmp/wg-hy2-server-dual.XXXXXXXX')
+[[ "$remote_stage" =~ ^/tmp/wg-hy2-server-dual\.[a-zA-Z0-9]{8}$ ]] || die "unexpected remote temporary directory"
 scp "${scp_opts[@]}" -q -r \
     "$bundle/landing" "$tmp/one_click_install.sh" "$tmp/wg_hy2_install.py" \
     "$landing_user@$landing_host:$remote_stage/"
@@ -186,7 +223,6 @@ local_flags=()
 (( enable == 1 )) || local_flags+=(--no-enable)
 "$tmp/one_click_install.sh" "$bundle/relay" --sing-box "$local_sing_box" "${local_flags[@]}"
 
-install -m 600 "$bundle/client/client.json" "$client_output"
 echo "Dual server installation complete. Client config: $client_output" >&2
 if (( enable == 0 )); then
     echo "Both services started without boot autostart (--no-enable)." >&2

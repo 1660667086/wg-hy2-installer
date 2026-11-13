@@ -12,6 +12,20 @@
 
 > **客户端兼容性：**客户端必须支持 sing-box 的 WireGuard endpoint 和 Hysteria2 detour；原版 WireGuard 客户端不能直接导入或运行此组合。
 
+## 服务器交互式安装
+
+通过 SSH 登录服务器后，执行以下命令打开中文菜单：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/1660667086/wg-hy2-installer/main/menu.sh | sudo bash
+```
+
+菜单可选择单机出口、双机部署或管理本机服务，并可设置 HY2 和 WireGuard 端口及开机启动。双机模式在中转机执行；中转机必须能以 SSH 密钥无交互登录具有 root 权限的落地机，首次连接须事先核对并接受 SSH 主机指纹。云安全组仍需自行放行对应 UDP 端口。
+
+单机配置保存在 `/root/wg-hy2-single/bundle/`；双机客户端配置默认保存在中转机 `/root/wg-hy2-client.json`，完整恢复包位于 `/root/wg-hy2-recovery.*`。这些目录含有私钥和连接凭据；双机流程在中转机生成并保存完整配置，因此中转机必须可信。安装中途失败时请查看屏幕上的恢复路径和两端服务状态，不要直接重复安装。
+
+脚本支持常见 Linux 服务器，需要 systemd、Python 3、OpenSSL、curl 和 iptables/ip6tables 等工具。当前客户端配置是 sing-box 格式，默认所有公网 IPv4 走隧道，并不包含国内外或 AI 分流。
+
 ## 使用前准备
 
 - 一台可信的配置生成设备，安装 Python 3、OpenSSL 和带 `with_gvisor`、`with_quic`、`with_wireguard` 的 sing-box 1.14.4。
@@ -52,7 +66,7 @@ python3 wg_hy2_generate.py --mode dual \
 
 默认 HY2 端口为 UDP 443，WG 端口为 UDP 51820，可分别用 `--hy2-port` 和 `--wg-port` 调整。输出目录必须不存在。生成器会创建只允许所有者访问的目录和配置文件。
 
-单机部署包包含 `single/` 与 `client/`；双机部署包包含 `relay/`、`landing/` 与 `client/`。**只把对应角色的目录发送到对应服务器**；不要把 `client/` 或整个部署包传给中转机。配置文件和角色目录包含不同的密钥或连接凭据，应妥善保存。
+单机部署包包含 `single/` 与 `client/`；双机部署包包含 `relay/`、`landing/` 与 `client/`。若在可信电脑上生成，应只把对应角色的目录发送到对应服务器，不要把客户端配置或整个部署包传给中转机。服务器交互菜单则在中转机生成并保留完整恢复包，需要信任中转机。配置文件和角色目录包含不同的密钥或连接凭据，应妥善保存。
 
 ## 安装服务器角色
 

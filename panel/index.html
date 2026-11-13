@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>WG + HY2 管理面板</title>
+  <style>
+    :root { color-scheme: light; font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; color: #172a38; background: #f2f6f5; }
+    * { box-sizing: border-box; } body { margin: 0; } main { max-width: 1040px; margin: auto; padding: 32px 20px 64px; }
+    header { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-bottom: 28px; }
+    .brand { display:flex; align-items:center; gap:12px; } .mark { display:grid; place-items:center; width:42px; height:42px; border-radius:12px; background:#173f3a; color:#fff; font-weight:700; }
+    h1 { font-size:21px; margin:0; letter-spacing:-.02em; } h2 { margin:0 0 6px; font-size:20px; } h3 { margin:0; font-size:16px; }
+    p { line-height:1.55; } .sub, .hint { color:#647a79; font-size:13px; margin:5px 0 0; }
+    .card { background:white; border:1px solid #dfe9e6; border-radius:16px; padding:24px; box-shadow:0 7px 30px #14362d08; }
+    .login { max-width:420px; margin:12vh auto 0; } .login h2 { margin-bottom:10px; } .stack { display:grid; gap:16px; }
+    .toolbar { display:flex; justify-content:space-between; align-items:center; gap:16px; margin:4px 0 20px; }
+    .grid { display:grid; grid-template-columns: minmax(0,1fr) 310px; gap:18px; align-items:start; }
+    label { display:block; font-size:13px; font-weight:600; margin:0 0 7px; color:#415d5a; }
+    input { width:100%; border:1px solid #cddbd7; border-radius:9px; padding:10px 12px; font:inherit; color:#172a38; background:white; }
+    input:focus { outline:3px solid #bde1d7; border-color:#398577; } button { border:0; cursor:pointer; border-radius:9px; padding:10px 14px; background:#176b59; color:white; font:inherit; font-size:13px; font-weight:650; }
+    button:hover { background:#105747; } button:disabled { opacity:.5; cursor:not-allowed; } .secondary { background:#edf4f1; color:#1b6657; } .secondary:hover { background:#dcece6; } .danger { color:#a3453d; background:#fbefed; } .danger:hover { background:#f7dfdc; }
+    .topbtn { background:transparent; color:#426960; border:1px solid #d1dfdb; } .topbtn:hover { background:#e8f1ed; }
+    .row { border-top:1px solid #edf2f0; padding:17px 0; display:flex; gap:14px; flex-wrap:wrap; justify-content:space-between; align-items:center; } .row:first-of-type { margin-top:15px; } .row:last-child { padding-bottom:0; }
+    .name { font-weight:650; overflow-wrap:anywhere; } .meta { color:#6a7d7b; font-size:13px; margin-top:6px; } .pill { display:inline-block; margin-left:8px; padding:3px 8px; border-radius:20px; font-size:11px; background:#e2f4eb; color:#1a7555; } .pill.off { background:#f8eae6; color:#a14e41; }
+    .actions { display:flex; flex-wrap:wrap; gap:7px; } .actions button { padding:8px 10px; font-size:12px; }
+    .empty { padding:35px 0 18px; color:#80918e; font-size:14px; text-align:center; }
+    .notice { margin:0 0 18px; padding:11px 14px; background:#fff4e4; color:#83571e; border:1px solid #f5ddba; border-radius:9px; font-size:13px; white-space:pre-wrap; }
+    .message { min-height:20px; margin:12px 0 0; color:#a3453d; font-size:13px; white-space:pre-wrap; overflow-wrap:anywhere; } .ok { color:#176b59; } [hidden] { display:none !important; }
+    dialog { border:1px solid #dfe9e6; border-radius:16px; width:min(460px,calc(100% - 32px)); padding:24px; box-shadow:0 20px 80px #102d2960; } dialog::backdrop { background:#132f2cb0; } .dialog-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:18px; }
+    @media(max-width:700px) { main { padding:22px 15px; } .grid { grid-template-columns:1fr; } .toolbar { align-items:start; } .card { padding:19px; } }
+  </style>
+</head>
+<body>
+<main>
+  <header><div class="brand"><div class="mark">W</div><div><h1>WG + HY2</h1><p class="sub">用户与连接管理</p></div></div><button class="topbtn" id="logout" hidden>退出登录</button></header>
+  <section id="login-view" class="card login" hidden>
+    <h2>登录管理面板</h2><p class="hint">使用安装时设置的管理员密码。</p>
+    <form id="login-form" class="stack" style="margin-top:22px"><div><label for="password">管理员密码</label><input id="password" type="password" autocomplete="current-password" required></div><button>登录</button></form>
+    <p class="message" id="login-message" role="alert"></p>
+  </section>
+  <section id="app" hidden>
+    <div class="toolbar"><div><h2>用户管理</h2><p class="hint">管理访问权限与到期时间。</p></div><button class="topbtn" id="refresh">刷新</button></div>
+    <p class="notice">配置文件包含私钥，请通过可信渠道交付给对应用户。新增或修改用户时，服务可能短暂重启。</p>
+    <p class="message" id="message" role="status"></p>
+    <div class="grid"><section class="card"><h3>用户列表</h3><p class="hint" id="count"></p><div id="users"></div></section>
+      <section class="card"><h3>添加用户</h3><p class="hint">创建独立的客户端配置。</p><form id="add-form" class="stack" style="margin-top:20px"><div><label for="new-name">用户名称</label><input id="new-name" maxlength="64" required placeholder="例如：我的手机"></div><div><label for="new-expiry">到期时间</label><input id="new-expiry" type="datetime-local"><p class="hint">留空表示永不过期；使用当前设备时区。</p></div><button>添加用户</button></form></section></div>
+  </section>
+  <dialog id="expiry-dialog"><form id="expiry-form"><h2>修改到期时间</h2><p class="hint" id="expiry-user"></p><div style="margin-top:18px"><label for="expiry-input">到期时间</label><input id="expiry-input" type="datetime-local"><p class="hint">留空表示永不过期；使用当前设备时区。已停用或到期的用户延长期限后，还需点击“启用”。</p></div><p class="message" id="expiry-error"></p><div class="dialog-actions"><button type="button" class="secondary" id="cancel-expiry">取消</button><button>保存</button></div></form></dialog>
+</main>
+<script>
+'use strict';
+let csrf = null, editing = null;
+const $ = id => document.getElementById(id);
+function message(text, ok = false) { $('message').textContent = text; $('message').classList.toggle('ok', ok); }
+function show(authenticated) { $('login-view').hidden = authenticated; $('app').hidden = !authenticated; $('logout').hidden = !authenticated; }
+async function request(path, options = {}) {
+  const method = options.method || 'GET', headers = {Accept:'application/json'};
+  if (options.body !== undefined) headers['Content-Type'] = 'application/json';
+  if (method !== 'GET' && csrf) headers['X-CSRF-Token'] = csrf;
+  const response = await fetch(path, {method, headers, credentials:'same-origin', cache:'no-store', body: options.body === undefined ? undefined : JSON.stringify(options.body)});
+  let data = {}; try { data = await response.json(); } catch (_) {}
+  if (!response.ok) { if (response.status === 401 && path !== '/api/login') { csrf = null; show(false); } throw new Error(typeof data.error === 'string' ? data.error : '操作失败，请稍后重试。'); }
+  return data;
+}
+function expiryValue(input) { if (!input) return null; const time = new Date(input).getTime(); if (!Number.isFinite(time)) throw new Error('请输入有效的到期时间。'); return Math.floor(time / 1000); }
+function localInput(unix) { if (unix == null) return ''; const d = new Date(unix * 1000); if (!Number.isFinite(d.getTime())) return ''; const pad = n => String(n).padStart(2,'0'); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`; }
+function action(label, cls, fn) { const b = document.createElement('button'); b.type='button'; b.className=cls; b.textContent=label; b.addEventListener('click', async () => { b.disabled=true; try { await fn(); } catch(e) { message(e.message); } finally { b.disabled=false; } }); return b; }
+async function loadUsers() {
+  const data = await request('/api/users'); const users = Array.isArray(data.users) ? data.users : [];
+  const container = $('users'); container.replaceChildren(); $('count').textContent = `共 ${users.length} 位用户`;
+  if (!users.length) { const e=document.createElement('div'); e.className='empty'; e.textContent='还没有用户，添加后即可获取配置。'; container.append(e); return; }
+  for (const user of users) {
+    const row=document.createElement('div'); row.className='row'; const details=document.createElement('div');
+    const name=document.createElement('div'); name.className='name'; name.append(document.createTextNode(user.name));
+    const badge=document.createElement('span'); badge.className='pill' + (user.enabled && !user.expired ? '' : ' off'); badge.textContent=user.expired ? '已到期' : !user.enabled ? '停用' : '启用'; name.append(badge);
+    const meta=document.createElement('div'); meta.className='meta'; meta.textContent=user.expires_at == null ? '永不过期' : `到期：${new Date(user.expires_at * 1000).toLocaleString()}`;
+    details.append(name,meta); const actions=document.createElement('div'); actions.className='actions'; const id=encodeURIComponent(user.id);
+    actions.append(action('到期时间','secondary',async()=>{ editing=user.id; $('expiry-user').textContent=user.name; $('expiry-input').value=localInput(user.expires_at); $('expiry-error').textContent=''; $('expiry-dialog').showModal(); }));
+    actions.append(action('复制配置','secondary',async()=>{ const {config}=await request(`/api/users/${id}/client`); if (!navigator.clipboard) throw new Error('浏览器无法访问剪贴板，请使用下载配置。'); await navigator.clipboard.writeText(JSON.stringify(config,null,2)); message('配置已复制，请仅发送给对应用户。',true); }));
+    actions.append(action('下载配置','secondary',async()=>{ const {config}=await request(`/api/users/${id}/client`); const blob=new Blob([JSON.stringify(config,null,2)+'\n'],{type:'application/json'}); const url=URL.createObjectURL(blob); const link=document.createElement('a'); link.href=url; link.download='wg-hy2-client.json'; document.body.append(link); link.click(); link.remove(); setTimeout(()=>URL.revokeObjectURL(url),1000); message('配置已下载，请妥善保管。',true); }));
+    actions.append(action(user.enabled ? '停用' : '启用',user.enabled ? 'danger' : 'secondary',async()=>{ await request(`/api/users/${id}/${user.enabled ? 'disable' : 'enable'}`,{method:'POST',body:{}}); await loadUsers(); message('用户状态已更新。',true); }));
+    row.append(details,actions); container.append(row);
+  }
+}
+$('login-form').addEventListener('submit',async event=>{ event.preventDefault(); $('login-message').textContent=''; try { const data=await request('/api/login',{method:'POST',body:{password:$('password').value}}); csrf=data.csrf; $('password').value=''; show(true); await loadUsers(); } catch(e) { $('login-message').textContent=e.message; } });
+$('logout').addEventListener('click',async()=>{ try { await request('/api/logout',{method:'POST',body:{}}); csrf=null; show(false); } catch(e) { message(e.message); } });
+$('refresh').addEventListener('click',async()=>{ try { await loadUsers(); message('已刷新。',true); } catch(e) { message(e.message); } });
+$('add-form').addEventListener('submit',async event=>{ event.preventDefault(); try { await request('/api/users',{method:'POST',body:{name:$('new-name').value.trim(),expires_at:expiryValue($('new-expiry').value)}}); $('add-form').reset(); await loadUsers(); message('用户已添加，可下载配置。',true); } catch(e) { message(e.message); } });
+$('cancel-expiry').addEventListener('click',()=>$('expiry-dialog').close());
+$('expiry-form').addEventListener('submit',async event=>{ event.preventDefault(); try { await request(`/api/users/${encodeURIComponent(editing)}`,{method:'PATCH',body:{expires_at:expiryValue($('expiry-input').value)}}); $('expiry-dialog').close(); await loadUsers(); message('到期时间已更新。',true); } catch(e) { $('expiry-error').textContent=e.message; } });
+(async()=>{ try { const session=await request('/api/session'); csrf=session.csrf; show(Boolean(session.authenticated)); if (session.authenticated) await loadUsers(); } catch(e) { show(false); $('login-message').textContent=e.message; } })();
+</script>
+</body>
+</html>

@@ -12,6 +12,7 @@ FILES = (
     'menu.sh', 'server_single_install.sh', 'server_dual_install.sh',
     'server_landing_prepare.sh', 'server_relay_import.sh', 'one_click_install.sh',
     'wg_hy2_generate.py', 'wg_hy2_install.py', 'import_relay_token.py',
+    'panel_install.sh', 'panel_cli.py', 'panel_backend.py', 'panel_server.py', 'panel/index.html',
 )
 
 
@@ -31,7 +32,7 @@ def contents(name):
         return 1
     fi
 """
-        end = """    if ! cp -- \"$WG_HY2_BUNDLED_DIR\"/* \"$tmp/\"; then
+        end = """    if ! cp -R -- \"$WG_HY2_BUNDLED_DIR\"/* \"$tmp/\"; then
         rm -rf -- \"$tmp\"
         printf '准备内置安装文件失败。\\n' >&3
         return 1
@@ -75,6 +76,7 @@ trap cleanup_bundle EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 chmod 700 "$WG_HY2_BUNDLED_DIR"
+mkdir -m 700 "$WG_HY2_BUNDLED_DIR/panel"
 base64 -d <<'WG_HY2_EMBEDDED_ARCHIVE' | gzip -d | tar -xf - -C "$WG_HY2_BUNDLED_DIR"
 ''' + payload + '''
 WG_HY2_EMBEDDED_ARCHIVE

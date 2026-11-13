@@ -255,6 +255,83 @@ class GeneratedTunnelIntegration(unittest.TestCase):
         with self.running(configs):
             self.assertFalse(self.request(client))
 
+    def test_panel_users_connect_and_revocation_preserves_original(self):
+        """Exercise panel-generated peers over real local HY2 and WireGuard.
+
+        The fake service control represents a stopped systemd service: each
+        temporary sing-box server is explicitly restarted between phases.
+        Neither systemd nor host routes or firewall rules are touched.
+        """
+        import panel_backend
+
+        class StoppedControl:
+            def active(self, _name):
+                return False
+
+            def restart(self, _name):
+                raise AssertionError('A stopped service must not be started')
+
+        for mode in ('single', 'dual'):
+            with self.subTest(mode=mode):
+                role = 'single' if mode == 'single' else 'landing'
+                bundle = self.bundles[mode]
+                scratch = self.root / ('panel-' + mode)
+                scratch.mkdir(mode=0o700)
+                server_path = scratch / 'server.json'
+                server = json.loads((bundle / role / 'server.json').read_text())
+                self.write_json(server_path, server)
+                original_client, runtime = self.fixture(mode)
+                # The local test environment may ship LibreSSL without
+                # OpenSSL's X25519 PKCS#8 support.  These two mappings are
+                # taken only from the matching, freshly generated fixture;
+                # production public-key derivation is covered separately.
+                known_public = {
+                    server['endpoints'][0]['private_key']:
+                        original_client['endpoints'][0]['peers'][0]['public_key'],
+                    original_client['endpoints'][0]['private_key']:
+                        server['endpoints'][0]['peers'][0]['public_key'],
+                }
+                now = [1000]
+                store = panel_backend.PanelStore(
+                    server_path, bundle / 'client/client.json', scratch / 'state.json',
+                    self.bin, 'wg-hy2-' + role + '.service', role,
+                    control=StoppedControl(), clock=lambda: now[0],
+                    public_key=lambda private: known_public[private],
+                )
+                alice = store.add_user('alice', None)
+                bob = store.add_user('bob', 1100)
+                alice_client = store.export_client(alice['id'])
+                bob_client = store.export_client(bob['id'])
+                self.assertNotEqual(alice_client['endpoints'][0]['private_key'],
+                                    bob_client['endpoints'][0]['private_key'])
+                self.assertNotEqual(alice_client['endpoints'][0]['address'],
+                                    bob_client['endpoints'][0]['address'])
+                if mode == 'single':
+                    self.assertNotEqual(alice_client['outbounds'][0]['password'],
+                                        bob_client['outbounds'][0]['password'])
+
+                def runtime_configs():
+                    configs = copy.deepcopy(runtime)
+                    managed = json.loads(server_path.read_text())
+                    configs[0]['endpoints'] = managed['endpoints']
+                    if role == 'single':
+                        configs[0]['inbounds'] = managed['inbounds']
+                        configs[0]['inbounds'][0]['listen'] = '127.0.0.1'
+                    return configs
+
+                with self.running(runtime_configs()):
+                    self.assertTrue(self.request(original_client), 'original client before changes')
+                    self.assertTrue(self.request(alice_client), 'new alice client')
+                    self.assertTrue(self.request(bob_client), 'new bob client')
+
+                store.disable_user(alice['id'])
+                now[0] = 1200
+                self.assertEqual(store.expire_users(), 1)
+                with self.running(runtime_configs()):
+                    self.assertTrue(self.request(original_client), 'original client after changes')
+                    self.assertFalse(self.request(alice_client), 'disabled client must fail')
+                    self.assertFalse(self.request(bob_client), 'expired client must fail')
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

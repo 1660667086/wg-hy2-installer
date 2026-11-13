@@ -208,8 +208,38 @@ manage_service() {
     esac
 }
 
+install_panel() {
+    local mode public_ip port template answer
+    local -a template_arg=() autostart_arg=()
+    printf '\n在单机服务器或双机落地机安装面板。用户变更会短暂重启正在运行的服务。\n' >&3
+    while :; do
+        ask mode '请选择管理对象：1 单机，2 落地机，0 返回'
+        case $mode in
+            1) mode=single; break ;;
+            2) mode=landing; break ;;
+            0) return ;;
+            *) printf '请输入有效选项。\n' >&3 ;;
+        esac
+    done
+    ask_required public_ip '本面板服务器公网 IPv4'
+    ask_port port '面板 HTTPS TCP 端口' 8443
+    ask template '客户端模板绝对路径（默认使用本机安装时生成的模板）'
+    [[ -z $template ]] || template_arg=(--template "$template")
+    while :; do
+        ask answer '面板开机自动启动？输入 y 或 n' n
+        case $answer in
+            y|Y) autostart_arg=(--enable-panel); break ;;
+            n|N) break ;;
+            *) printf '请输入 y 或 n。\n' >&3 ;;
+        esac
+    done
+    printf '请在云安全组放行 TCP %s，建议限制管理员来源 IP。到期检查任务将开机自启。\n' "$port" >&3
+    run_install panel_install.sh --role "$mode" --public-ip "$public_ip" --port "$port" \
+        ${template_arg[@]+"${template_arg[@]}"} ${autostart_arg[@]+"${autostart_arg[@]}"} || true
+}
+
 while :; do
-    printf '\n=== WG + HY2 安装管理 ===\n1) 安装单机出口\n2) 安装双机（中转机通过 SSH 安装落地机）\n3) 管理本机服务\n4) 安装落地机并生成对接信息\n5) 在中转机导入对接信息并安装\n6) 显示落地机对接信息\n0) 退出\n' >&3
+    printf '\n=== WG + HY2 安装管理 ===\n1) 安装单机出口\n2) 安装双机（中转机通过 SSH 安装落地机）\n3) 管理本机服务\n4) 安装落地机并生成对接信息\n5) 在中转机导入对接信息并安装\n6) 显示落地机对接信息\n7) 安装可视化管理面板\n0) 退出\n' >&3
     ask choice '请选择'
     case $choice in
         1) install_single ;;
@@ -218,6 +248,7 @@ while :; do
         4) prepare_landing ;;
         5) import_relay || true ;;
         6) show_handoff ;;
+        7) install_panel ;;
         0) printf '已退出。\n' >&3; exit 0 ;;
         *) printf '请输入有效选项。\n' >&3 ;;
     esac

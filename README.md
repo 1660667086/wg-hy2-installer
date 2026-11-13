@@ -17,10 +17,12 @@
 通过 SSH 登录服务器后，执行以下命令打开中文菜单：
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/1660667086/wg-hy2-installer/main/menu.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/1660667086/wg-hy2-installer/main/install.sh | sudo bash
 ```
 
 菜单可选择单机出口、双机部署或管理本机服务，并可设置 HY2 和 WireGuard 端口及开机启动。选择菜单 **2** 时在中转机执行；中转机必须能以 SSH 密钥无交互登录具有 root 权限的落地机，首次连接须事先核对并接受 SSH 主机指纹。云安全组仍需自行放行对应 UDP 端口。
+
+`install.sh` 将菜单和项目安装代码打包在同一个脚本内；若服务器缺少匹配的 sing-box，安装时还需要联网下载并校验官方二进制。修改项目源码后，可在仓库内运行 `python3 build_single_file.py` 重新生成该脚本。
 
 也可不使用两台服务器之间的 SSH：
 

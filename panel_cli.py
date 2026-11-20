@@ -76,6 +76,43 @@ def paths(role, template=None):
     return config, binary, template_path, service
 
 
+def ask_password(attempts=3):
+    """Prompt until a valid, confirmed password is entered, instead of
+    abandoning the whole setup on the first typo."""
+    problem = '未设置密码'
+    for remaining in range(attempts, 0, -1):
+        password = getpass.getpass('设置面板密码（至少 12 位）：')
+        confirm = getpass.getpass('再次输入面板密码：')
+        if password != confirm:
+            problem = '两次密码不一致'
+        else:
+            try:
+                return password_record(password)
+            except ValueError as exc:
+                problem = str(exc)
+        if remaining > 1:
+            print(problem + '，请重新输入。', file=sys.stderr)
+    raise ValueError(problem)
+
+
+def firewall_hint(port):
+    """The panel adds no firewall rule; say how to open its port where a host
+    firewall would otherwise silently drop the HTTPS connection."""
+    try:
+        if run('systemctl', 'is-active', '--quiet', 'firewalld', check=False).returncode == 0:
+            return ('检测到 firewalld，还需放行面板端口：'
+                    f'firewall-cmd --permanent --add-port={port}/tcp && firewall-cmd --reload')
+    except (OSError, subprocess.SubprocessError):
+        pass
+    try:
+        ufw_conf = Path('/etc/ufw/ufw.conf').read_text(encoding='utf-8', errors='replace')
+    except OSError:
+        return None
+    if shutil.which('ufw') and any(line.strip() == 'ENABLED=yes' for line in ufw_conf.splitlines()):
+        return f'检测到 ufw 已启用，还需放行面板端口：ufw allow {port}/tcp'
+    return None
+
+
 def create_store(cfg):
     role = cfg['role']
     config, binary, template, service = paths(role, cfg['template'])
@@ -153,12 +190,7 @@ def setup(args):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
         probe.bind(('0.0.0.0', port))
 
-    password = getpass.getpass('设置面板密码（至少 12 位）：')
-    confirm = getpass.getpass('再次输入面板密码：')
-    if password != confirm:
-        raise ValueError('两次密码不一致')
-    record = password_record(password)
-    del password, confirm
+    record = ask_password()
 
     made_units = []
     made_dir = False
@@ -218,6 +250,9 @@ def setup(args):
     print(f'面板地址：https://{public_ip}:{port}/')
     print('证书 ' + fingerprint)
     print('请从可信 SSH 通道核对证书指纹；防火墙和云安全组需允许面板 TCP 端口。')
+    hint = firewall_hint(port)
+    if hint:
+        print(hint)
     print('到期检查每 30 秒运行一次；面板默认不开机自启。' if not args.enable_panel
           else '到期检查每 30 秒运行一次；面板已设置开机自启。')
 

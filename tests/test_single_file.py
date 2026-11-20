@@ -17,9 +17,31 @@ builder = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(builder)
 
 
+def wait_exit(pid, timeout=5):
+    """The pty reports EOF slightly before the child can be reaped, so poll."""
+    deadline = time.monotonic() + timeout
+    while True:
+        ended, status = os.waitpid(pid, os.WNOHANG)
+        if ended == pid or time.monotonic() > deadline:
+            return ended, status
+        time.sleep(0.02)
+
+
 class BundleTest(unittest.TestCase):
     def test_committed_file_matches_builder(self):
-        self.assertEqual((ROOT / 'install.sh').read_text(), builder.build())
+        self.assertTrue(builder.is_current((ROOT / 'install.sh').read_text()),
+                        'install.sh is out of date; run python3 build_single_file.py')
+
+    def test_check_ignores_compression_bytes_but_not_content(self):
+        # Another zlib (e.g. zlib-ng) compresses differently; that is not staleness.
+        self.assertTrue(builder.is_current(builder.render(builder.archive(), level=1)))
+        original = builder.contents
+        with patch.object(builder, 'contents',
+                          side_effect=lambda name: original(name) + (b'# edit\n' if name == 'menu.sh' else b'')):
+            stale = builder.build()
+        self.assertFalse(builder.is_current(stale))
+        self.assertFalse(builder.is_current(builder.build().replace('umask 077', 'umask 022', 1)))
+        self.assertFalse(builder.is_current('#!/bin/sh\n'))
 
     def test_piped_installer_opens_menu_and_exits(self):
         original = builder.contents
@@ -50,7 +72,7 @@ class BundleTest(unittest.TestCase):
                         if exc.errno == errno.EIO:
                             break
                         raise
-                ended, status = os.waitpid(pid, os.WNOHANG)
+                ended, status = wait_exit(pid)
                 self.assertEqual(ended, pid, 'menu did not exit')
                 self.assertEqual(os.waitstatus_to_exitcode(status), 0)
                 self.assertIn('WG + HY2 安装管理', output.decode('utf-8', 'replace'))

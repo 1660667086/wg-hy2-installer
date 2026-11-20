@@ -2,6 +2,8 @@
 import argparse
 import importlib.util
 from pathlib import Path
+import subprocess
+import sys
 import unittest
 
 MODULE = Path(__file__).resolve().parents[1] / 'wg_hy2_generate.py'
@@ -28,6 +30,21 @@ class AddressValidationTest(unittest.TestCase):
         for value in ('0', '65536', '-1', 'a'):
             with self.subTest(port=value), self.assertRaises(argparse.ArgumentTypeError):
                 generator.port_number(value)
+
+    def test_check_only_validates_without_sing_box(self):
+        def check(*args):
+            return subprocess.run([sys.executable, str(MODULE), *args], capture_output=True, text=True)
+        ok = check('--mode', 'single', '--entry-ip', '8.8.8.8', '--check-only')
+        self.assertEqual(ok.returncode, 0, ok.stderr)
+        self.assertEqual(ok.stdout, '')
+        for args in (('--mode', 'single', '--entry-ip', '10.0.0.1'),
+                     ('--mode', 'single', '--entry-ip', '8.8.8.8', '--hy2-port', '443', '--wg-port', '443'),
+                     ('--mode', 'dual', '--entry-ip', '8.8.8.8', '--exit-ip', '8.8.8.8'),
+                     ('--mode', 'dual', '--entry-ip', '8.8.8.8')):
+            with self.subTest(args=args):
+                self.assertNotEqual(check(*args, '--check-only').returncode, 0)
+        # Without --check-only, generation still needs a binary and an output directory.
+        self.assertEqual(check('--mode', 'single', '--entry-ip', '8.8.8.8').returncode, 2)
 
 
 if __name__ == '__main__':

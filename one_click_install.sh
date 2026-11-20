@@ -27,6 +27,8 @@ bundle=$1
 shift
 [[ -d "$bundle" ]] || die "role directory does not exist: $bundle"
 command -v python3 >/dev/null 2>&1 || die "python3 is required"
+python3 -c 'import sys; sys.exit(sys.version_info < (3, 8))' \
+    || die "Python 3.8 or newer is required (found: $(python3 -V 2>&1))"
 
 manual_binary=""
 dry_run=0
@@ -160,8 +162,11 @@ else
     binary=$(download_binary)
 fi
 
+# ${array[@]+...} keeps an empty argument list working under `set -u` in
+# bash releases before 4.4, which treat an empty "${array[@]}" as unbound.
 if [[ -n "$manual_binary" ]]; then
-    exec python3 "$script_dir/wg_hy2_install.py" --bundle "$bundle" "${installer_args[@]}"
+    exec python3 "$script_dir/wg_hy2_install.py" --bundle "$bundle" \
+        ${installer_args[@]+"${installer_args[@]}"}
 fi
 exec python3 "$script_dir/wg_hy2_install.py" --bundle "$bundle" \
-    --sing-box "$binary" "${installer_args[@]}"
+    --sing-box "$binary" ${installer_args[@]+"${installer_args[@]}"}

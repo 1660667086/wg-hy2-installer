@@ -1,12 +1,16 @@
 """Unprivileged installer safety tests; no systemd or firewall is modified."""
 
+from contextlib import ExitStack, redirect_stderr
+import errno
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
 import signal
 import socket
 import subprocess
+import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -225,6 +229,123 @@ class InstallerTest(unittest.TestCase):
         with self.assertRaises(FileExistsError):
             installer.write_exclusive(path, "replace", 0o600)
         self.assertEqual(path.read_text(), "keep")
+
+    def test_firewall_marker_matches_only_the_exact_instance_name(self):
+        other = "-A INPUT -p udp -m udp --dport 443 -m comment --comment wg-hy2-single2 -j ACCEPT\n"
+        self.assertFalse(installer.rule_marker_present(other, "wg-hy2-single"))
+        self.assertTrue(installer.rule_marker_present(other, "wg-hy2-single2"))
+        quoted = '-A INPUT -m comment --comment "wg-hy2-single" -j DROP'
+        self.assertTrue(installer.rule_marker_present(quoted, "wg-hy2-single"))
+
+    def test_hosts_without_ipv6_get_only_ipv4_rules(self):
+        rules = installer.firewall_rules(manifest("landing"), "test", ipv6=False)
+        self.assertTrue(rules)
+        self.assertEqual({family for family, _ in rules}, {4})
+        path = self.path / "firewall.sh"
+        path.write_text(installer.firewall_script(rules, str(self.ip4), None))
+        path.chmod(0o700)
+        subprocess.run([path, "add"], env=self.env, check=True)
+        self.assertEqual(len(self.current_rules()), len(rules))
+        subprocess.run([path, "remove"], env=self.env, check=True)
+        self.assertFalse(self.current_rules())
+
+    def test_ipv6_detection(self):
+        unsupported = OSError(errno.EAFNOSUPPORT, "Address family not supported by protocol")
+        with patch.object(installer.socket, "socket", side_effect=unsupported):
+            self.assertFalse(installer.ipv6_available())
+        with patch.object(installer.socket, "socket", side_effect=OSError(errno.EMFILE, "too many files")):
+            with self.assertRaises(installer.InstallError):
+                installer.ipv6_available()
+
+    def preflight_env(self, stack, which, ipv6=True):
+        stack.enter_context(patch.object(installer.platform, "system", return_value="Linux"))
+        stack.enter_context(patch.object(installer.os, "geteuid", return_value=0))
+        stack.enter_context(patch.object(installer.shutil, "which", side_effect=which))
+        stack.enter_context(patch.object(installer.Path, "exists", return_value=True))
+        stack.enter_context(patch.object(installer, "ipv6_available", return_value=ipv6))
+
+    def test_preflight_explains_missing_iptables(self):
+        with ExitStack() as stack:
+            self.preflight_env(stack, lambda tool: "/usr/bin/systemctl" if tool == "systemctl" else None)
+            with self.assertRaises(installer.InstallError) as raised:
+                installer.system_preflight("single", [443, 51820])
+        self.assertIn("apt install -y iptables", str(raised.exception))
+
+    def test_preflight_needs_no_ip6tables_without_ipv6(self):
+        tools = {"systemctl": "/usr/bin/systemctl", "iptables": "/usr/sbin/iptables"}
+        calls = []
+
+        def fake_run(argv, **_kwargs):
+            calls.append(argv)
+            return SimpleNamespace(returncode=0, stdout="not-found\n" if argv[1] == "show" else "-P INPUT ACCEPT\n")
+
+        with ExitStack() as stack:
+            self.preflight_env(stack, tools.get, ipv6=False)
+            stack.enter_context(patch.object(installer, "run", side_effect=fake_run))
+            stack.enter_context(patch.object(installer.os.path, "lexists", return_value=False))
+            stack.enter_context(patch.object(installer, "available_udp"))
+            result = installer.system_preflight("single", [443, 51820])
+        self.assertIsNone(result["ip6"])
+        self.assertFalse(result["ipv6"])
+        self.assertEqual([c[0] for c in calls if c[1] == "-w"], ["/usr/sbin/iptables"])
+
+    def test_preflight_refuses_an_existing_firewall_marker(self):
+        tools = {"systemctl": "/usr/bin/systemctl", "iptables": "/usr/sbin/iptables",
+                 "ip6tables": "/usr/sbin/ip6tables"}
+        existing = "-A INPUT -p udp -m comment --comment wg-hy2-single -j ACCEPT\n"
+        with ExitStack() as stack:
+            self.preflight_env(stack, tools.get)
+            stack.enter_context(patch.object(installer, "run", side_effect=lambda argv, **_: SimpleNamespace(
+                returncode=0, stdout="not-found\n" if argv[1] == "show" else existing)))
+            stack.enter_context(patch.object(installer.os.path, "lexists", return_value=False))
+            with self.assertRaises(installer.InstallError):
+                installer.system_preflight("single", [443])
+
+    def test_preflight_command_line(self):
+        script = str(ROOT / "wg_hy2_install.py")
+        for argv in ([], ["--preflight"], ["--preflight", "--name", "x", "--bundle", "/tmp"],
+                     ["--bundle", "/tmp", "--wg-port", "51820"]):
+            with self.subTest(argv=argv):
+                result = subprocess.run([sys.executable, script, *argv], capture_output=True, text=True)
+                self.assertEqual(result.returncode, 2, result.stderr)
+        same = subprocess.run([sys.executable, script, "--preflight", "--name", "single",
+                               "--hy2-port", "443", "--wg-port", "443"], capture_output=True, text=True)
+        self.assertEqual(same.returncode, 1)
+        self.assertIn("different UDP ports", same.stderr)
+
+    def test_failed_start_prints_service_log_before_rollback(self):
+        binary = self.path / "sing-box"
+        binary.write_bytes(b"test binary")
+        target, unit = self.path / "logged", self.path / "logged.service"
+
+        def fake_run(argv, **kwargs):
+            if str(argv[0]).endswith("journalctl"):
+                return SimpleNamespace(returncode=0, stdout="listen udp 0.0.0.0:443: address already in use\n")
+            if argv[1:2] == ["is-active"] and kwargs.get("check", True):
+                raise installer.InstallError("systemctl exited with status 3")
+            return SimpleNamespace(returncode=1 if argv[1:2] == ["is-active"] else 0, stdout="")
+
+        stderr = io.StringIO()
+        with patch.object(installer, "run", side_effect=fake_run), patch.object(installer.time, "sleep"), \
+                patch.object(installer.shutil, "which", return_value="/usr/bin/journalctl"), redirect_stderr(stderr):
+            with self.assertRaises(installer.InstallError):
+                installer.perform_install(
+                    target=target, unit=unit, unit_name=unit.name, binary=binary,
+                    config={}, manifest=manifest("single"), rules=self.rules("single"),
+                    systemctl="systemctl", ip4=str(self.ip4), ip6=str(self.ip6), no_enable=True,
+                )
+        self.assertIn("address already in use", stderr.getvalue())
+        self.assertFalse(target.exists())
+        self.assertFalse(unit.exists())
+
+    def test_firewalld_hint_names_the_port_to_open(self):
+        with patch.object(installer, "run", return_value=SimpleNamespace(returncode=0, stdout="")):
+            self.assertIn("--add-port=443/udp", installer.firewalld_hint("systemctl", manifest("single")))
+            landing = installer.firewalld_hint("systemctl", manifest("landing"))
+        self.assertIn('source address="8.8.8.8/32"', landing)
+        self.assertIn('port port="51820" protocol="udp"', landing)
+        with patch.object(installer, "run", return_value=SimpleNamespace(returncode=3, stdout="")):
+            self.assertIsNone(installer.firewalld_hint("systemctl", manifest("relay")))
 
     def test_binary_can_be_resolved_from_path_or_explicit_path(self):
         binary = self.path / "sing-box"

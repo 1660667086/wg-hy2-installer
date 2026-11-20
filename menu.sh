@@ -8,6 +8,9 @@ fail() { printf '错误：%s\n' "$*" >&2; exit 1; }
 [[ $EUID -eq 0 ]] || fail '请使用 root 运行，或者通过 sudo bash 启动。'
 [[ $(uname -s) == Linux ]] || fail '此安装菜单需要 Linux。'
 command -v curl >/dev/null 2>&1 || fail '请先安装 curl。'
+command -v python3 >/dev/null 2>&1 || fail '请先安装 Python 3.8 或更新版本（python3）。'
+python3 -c 'import sys; sys.exit(sys.version_info < (3, 8))' \
+    || fail "需要 Python 3.8 或更新版本，当前是 $(python3 -V 2>&1)。"
 if ! { exec 3<>/dev/tty; } 2>/dev/null; then
     fail '需要交互式终端；请通过 SSH 登录后运行命令。'
 fi
@@ -20,6 +23,9 @@ ask() {
         printf '%s: ' "$prompt" >&3
     fi
     IFS= read -r __menu_input <&3 || fail '终端输入结束。'
+    # Drop surrounding spaces or a pasted CR, e.g. from an IP copied out of a console.
+    __menu_input=${__menu_input#"${__menu_input%%[![:space:]]*}"}
+    __menu_input=${__menu_input%"${__menu_input##*[![:space:]]}"}
     [[ -n $__menu_input ]] || __menu_input=$default
     printf -v "$variable" '%s' "$__menu_input"
 }
@@ -137,7 +143,7 @@ show_handoff() {
 }
 
 import_relay() {
-    local dir line status=0 count=0
+    local dir line status=0 count=0 ended=0
     local -a enable_arg=()
     ask_enable
     dir=$(mktemp -d /tmp/wg-hy2-import.XXXXXXXX) || fail '无法创建临时目录。'
@@ -147,7 +153,11 @@ import_relay() {
     trap 'rm -f -- "$dir/token"; rmdir -- "$dir"; exit 130' INT TERM
     printf '\n请粘贴落地机生成的全部对接信息，最后另起一行输入 END。对接信息包含私钥。\n' >&3
     while IFS= read -r line <&3; do
-        [[ $line == END ]] && break
+        # Accept "END" with stray spaces or a CR from a Windows clipboard.
+        if [[ ${line//[[:space:]]/} == END ]]; then
+            ended=1
+            break
+        fi
         count=$((count + ${#line} + 1))
         if (( count > 131072 )); then
             printf '对接信息过长，已取消。\n' >&3
@@ -158,7 +168,7 @@ import_relay() {
         fi
         printf '%s\n' "$line" >> "$dir/token"
     done
-    if [[ ${line-} != END ]]; then
+    if (( ! ended )); then
         printf '输入中断，未安装。\n' >&3
         rm -f -- "$dir/token"
         rmdir -- "$dir"

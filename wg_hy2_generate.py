@@ -148,7 +148,7 @@ def client_config(entry_ip: str, hy_port: int, wg_port: int, mode: str,
     }
 
 
-def build(args: argparse.Namespace) -> None:
+def validate_args(args: argparse.Namespace) -> None:
     if args.mode == 'dual' and not args.exit_ip:
         raise ValueError('双机模式必须指定 --exit-ip')
     if args.mode == 'single' and args.exit_ip:
@@ -157,6 +157,10 @@ def build(args: argparse.Namespace) -> None:
         raise ValueError('双机模式的入口和落地必须是不同公网地址')
     if args.mode == 'single' and args.hy2_port == args.wg_port:
         raise ValueError('单机模式中 HY2 和 WG 端口不能相同')
+
+
+def build(args: argparse.Namespace) -> None:
+    validate_args(args)
     binary = verify_binary(args.sing_box)
     output = Path(args.output).expanduser().absolute()
     if output.exists() or output.is_symlink():
@@ -250,11 +254,18 @@ def main() -> None:
                         help='双机落地服务器的公网 IPv4')
     parser.add_argument('--hy2-port', type=port_number, default=443, help='HY2 UDP 端口（默认 443）')
     parser.add_argument('--wg-port', type=port_number, default=51820, help='WG UDP 端口（默认 51820）')
-    parser.add_argument('--sing-box', required=True, help='本机 sing-box 1.14.4 可执行文件路径')
-    parser.add_argument('--output', required=True, help='新建输出目录，不能已经存在')
+    parser.add_argument('--sing-box', help='本机 sing-box 1.14.4 可执行文件路径')
+    parser.add_argument('--output', help='新建输出目录，不能已经存在')
+    parser.add_argument('--check-only', action='store_true',
+                        help='只检查地址和端口参数，不需要 sing-box，也不生成文件')
     args = parser.parse_args()
+    if not args.check_only and (not args.sing_box or not args.output):
+        parser.error('生成配置需要 --sing-box 和 --output')
     os.umask(0o077)
     try:
+        if args.check_only:
+            validate_args(args)
+            return
         build(args)
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
         print('错误：' + str(exc), file=sys.stderr)

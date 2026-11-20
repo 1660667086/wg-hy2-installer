@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Install a landing endpoint and prepare a confidential relay/client handoff.
+# Every check that can fail runs before credentials are generated.
 set -Eeuo pipefail
 umask 077
 
@@ -29,7 +30,10 @@ done
 for value in "$hy2_port" "$wg_port"; do
     [[ $value =~ ^[0-9]{1,5}$ ]] && (( 10#$value >= 1 && 10#$value <= 65535 )) || die '端口须为 1–65535'
 done
+hy2_port=$((10#$hy2_port)) wg_port=$((10#$wg_port))
 for cmd in python3 openssl curl; do command -v "$cmd" >/dev/null || die "缺少 $cmd"; done
+python3 -c 'import sys; sys.exit(sys.version_info < (3, 8))' \
+    || die "需要 Python 3.8 或更新版本（当前：$(python3 -V 2>&1)）"
 
 compatible() {
     local info
@@ -44,6 +48,20 @@ cleanup() { rm -rf -- "$temp_dir"; }
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+
+for file in wg_hy2_generate.py wg_hy2_install.py one_click_install.sh; do
+    if [[ -f $script_dir/$file ]]; then
+        cp -- "$script_dir/$file" "$temp_dir/$file"
+    else
+        curl -fsSL --proto '=https' --tlsv1.2 "$RAW_BASE/$file" -o "$temp_dir/$file"
+    fi
+    chmod 700 "$temp_dir/$file"
+done
+
+python3 "$temp_dir/wg_hy2_generate.py" --mode dual --entry-ip "$relay_ip" --exit-ip "$landing_ip" \
+    --hy2-port "$hy2_port" --wg-port "$wg_port" --check-only || die '参数有误，未做任何更改'
+python3 "$temp_dir/wg_hy2_install.py" --preflight --name landing --wg-port "$wg_port" >/dev/null \
+    || die '安装前检查未通过（原因见上一行），未生成配置，也未修改系统'
 
 if [[ -n $binary ]]; then
     compatible "$binary" || die '指定的 sing-box 版本或编译标签不匹配'
@@ -73,21 +91,23 @@ else
     fi
 fi
 
-for file in wg_hy2_generate.py wg_hy2_install.py one_click_install.sh; do
-    if [[ -f $script_dir/$file ]]; then
-        cp -- "$script_dir/$file" "$temp_dir/$file"
-    else
-        curl -fsSL --proto '=https' --tlsv1.2 "$RAW_BASE/$file" -o "$temp_dir/$file"
-    fi
-    chmod 700 "$temp_dir/$file"
-done
-
 # Keep the complete private deployment package even if installation fails.
 state_dir=/root/wg-hy2-landing-handoff
-mkdir -m 700 -- "$state_dir" || die "无法创建 $state_dir（可能已经存在）；请检查已有部署"
+if [[ -e $state_dir || -L $state_dir ]]; then
+    # The preflight above proved wg-hy2-landing is not installed, so this is a
+    # leftover of an earlier attempt. Keep it, but out of the way of a retry.
+    old_dir="${state_dir}.old-$(date +%Y%m%d-%H%M%S)"
+    [[ ! -e $old_dir && ! -L $old_dir ]] || old_dir="$old_dir-$$"
+    mv -- "$state_dir" "$old_dir" || die "无法移走旧目录 $state_dir"
+    printf '发现上次未完成安装留下的 %s（落地服务并未安装），已移到 %s。\n' "$state_dir" "$old_dir" >&2
+fi
+mkdir -m 700 -- "$state_dir" || die "无法创建 $state_dir"
 printf '私有恢复包保存在 %s；安装失败时也会保留。\n' "$state_dir" >&2
-python3 "$temp_dir/wg_hy2_generate.py" --mode dual --entry-ip "$relay_ip" --exit-ip "$landing_ip" \
-    --hy2-port "$hy2_port" --wg-port "$wg_port" --sing-box "$binary" --output "$state_dir/bundle"
+if ! python3 "$temp_dir/wg_hy2_generate.py" --mode dual --entry-ip "$relay_ip" --exit-ip "$landing_ip" \
+    --hy2-port "$hy2_port" --wg-port "$wg_port" --sing-box "$binary" --output "$state_dir/bundle"; then
+    rmdir -- "$state_dir" 2>/dev/null || true
+    die '生成配置失败，未安装任何服务'
+fi
 
 # Token holds relay credentials and client secrets, but not the landing WG key.
 python3 - "$state_dir/bundle" "$state_dir/relay-token.txt" <<'PY'

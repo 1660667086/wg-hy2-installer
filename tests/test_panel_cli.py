@@ -1,6 +1,7 @@
 """Test installation planning and rollback without touching systemd."""
 import argparse
-from contextlib import ExitStack
+from contextlib import ExitStack, redirect_stderr
+import io
 import os
 from pathlib import Path
 import socket
@@ -12,6 +13,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import panel_cli as cli
+from panel_server import valid_password
 
 
 class PanelCLITest(unittest.TestCase):
@@ -80,6 +82,40 @@ class PanelCLITest(unittest.TestCase):
                         self.assertTrue((unit_dir / cli.TIMER_UNIT).exists())
                         self.assertIn(('systemctl', 'enable', '--now', cli.TIMER_UNIT), calls)
                     self.assertFalse(any('wg-hy2-single.service' in call for call in calls))
+
+    def test_password_prompt_allows_retrying_typos(self):
+        answers = iter(('short', 'short', 'long unique password', 'mistyped password',
+                        'long unique password', 'long unique password'))
+        stderr = io.StringIO()
+        with patch.object(cli.getpass, 'getpass', side_effect=lambda _prompt: next(answers)), \
+                redirect_stderr(stderr):
+            record = cli.ask_password()
+        self.assertTrue(valid_password('long unique password', record))
+        self.assertIn('12 到 1024', stderr.getvalue())
+        self.assertIn('两次密码不一致', stderr.getvalue())
+
+    def test_password_prompt_gives_up_after_three_attempts(self):
+        with patch.object(cli.getpass, 'getpass', return_value='short'), redirect_stderr(io.StringIO()):
+            with self.assertRaises(ValueError):
+                cli.ask_password()
+
+    def test_firewall_hint_for_panel_port(self):
+        with patch.object(cli, 'run', return_value=SimpleNamespace(returncode=0)):
+            self.assertIn('--add-port=8443/tcp', cli.firewall_hint(8443))
+        with tempfile.TemporaryDirectory() as tmp:
+            conf = Path(tmp) / 'ufw.conf'
+            conf.write_text('# comment\nENABLED=yes\n')
+            original = Path
+
+            def fake_path(value, *rest):
+                return conf if value == '/etc/ufw/ufw.conf' else original(value, *rest)
+
+            with patch.object(cli, 'run', return_value=SimpleNamespace(returncode=3)), \
+                    patch.object(cli, 'Path', side_effect=fake_path), \
+                    patch.object(cli.shutil, 'which', return_value='/usr/sbin/ufw'):
+                self.assertIn('ufw allow 8443/tcp', cli.firewall_hint(8443))
+                conf.write_text('ENABLED=no\n')
+                self.assertIsNone(cli.firewall_hint(8443))
 
 
 if __name__ == '__main__':
